@@ -1,7 +1,7 @@
 import { traverseNode } from './traverse.js';
 import { extractBorders, extractShadows, extractTextStyle, extractBackground } from '../styles/index.js';
 import { figmaColorToRGBA } from '../utils/colors.js';
-import { getIterableNodes, getLayoutDirection, hasImageFill, getNodeRole, extractBase64Image } from '../utils/nodes.js';
+import { getIterableNodes, getLayoutDirection, hasImageFill, getNodeRole } from '../utils/nodes.js';
 
 export async function handleManualTag(node, tag, isRoot, maps) {
   if (tag === 'container' || tag === 'container-full' || tag === 'page-wrapper') {
@@ -86,8 +86,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
     settings.description_typography_font_weight = dStyle.weight;
     if (dStyle.fontFamily) settings.description_typography_font_family = dStyle.fontFamily; // B4
 
-    const base64Image = await extractBase64Image(node);
-    settings.image = { url: base64Image || "", id: "" };
+    settings.image = { url: "", id: "" };
   }
   else if (tag === "icon-box") {
     let titleNode = textNodes.find(n => getNodeRole(n) === 'title_text');
@@ -293,8 +292,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
     }
   }
   else if (tag === "image") {
-    const base64Image = await extractBase64Image(node);
-    settings.image = { url: base64Image || "", id: "" };
+    settings.image = { url: "", id: "" };
     settings._width = { size: node.width, unit: "px" };
   }
   else if (tag === "image-carousel") {
@@ -303,8 +301,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
     
     for (const child of iterableNodes) {
       if (child.type === "IMAGE" || hasImageFill(child) || child.type === "RECTANGLE" || child.type === "FRAME") {
-        const base64Image = await extractBase64Image(child);
-        carouselItems.push({ id: child.id || "", url: base64Image || "" });
+        carouselItems.push({ id: child.id || "", url: "" });
       } else {
         carouselItems.push({ id: "", url: "" });
       }
@@ -458,8 +455,7 @@ export async function mapText(node, maps) {
 }
 
 export async function mapImage(node) {
-  const base64Image = await extractBase64Image(node);
-  let settings = { image: { url: base64Image || "", id: "" }, align: "center" };
+  let settings = { image: { url: "", id: "" }, align: "center" };
 
   extractBorders(node, settings, true, "image");
   extractShadows(node, settings, true, "image");

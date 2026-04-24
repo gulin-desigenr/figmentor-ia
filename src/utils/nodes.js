@@ -49,26 +49,3 @@ export function getSafeFontFamily(node) {
   return node.fontName.family || null;
 }
 
-export async function extractBase64Image(node) {
-  try {
-    if (!node.fills || node.fills === figma.mixed) return null;
-    const imageFill = node.fills.find(f => f.type === 'IMAGE' && f.visible !== false);
-    if (!imageFill || !imageFill.imageHash) return null;
-
-    const figmaImage = figma.getImageByHash(imageFill.imageHash);
-    if (!figmaImage) return null;
-
-    const bytes = await figmaImage.getBytesAsync();
-    const base64 = figma.base64Encode(bytes);
-
-    let mimeType = 'image/png';
-    if (bytes.length > 2 && bytes[0] === 255 && bytes[1] === 216) {
-      mimeType = 'image/jpeg';
-    }
-
-    return `data:${mimeType};base64,${base64}`;
-  } catch (err) {
-    console.error("Erro ao extrair imagem base64:", err);
-    return null;
-  }
-}
