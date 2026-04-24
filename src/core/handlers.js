@@ -1,6 +1,7 @@
 import { traverseNode } from './traverse.js';
 import { extractBorders, extractShadows, extractTextStyle, extractBackground } from '../styles/index.js';
 import { figmaColorToRGBA } from '../utils/colors.js';
+import { sanitizeCssId } from '../utils/cssId.js';
 import { getIterableNodes, getLayoutDirection, hasImageFill, getNodeRole } from '../utils/nodes.js';
 
 export async function handleManualTag(node, tag, isRoot, maps) {
@@ -337,9 +338,15 @@ export async function handleManualTag(node, tag, isRoot, maps) {
     settings.slides_to_show = "3";
     settings.slides_to_scroll = "1";
     settings.navigation = "both";
+
+    const cssId = sanitizeCssId(node.name);
+    if (cssId) settings.css_id = cssId;
     
     return { elType: "widget", widgetType: "nested-carousel", settings: settings, elements: elements };
   }
+
+  const cssId = sanitizeCssId(node.name);
+  if (cssId) settings.css_id = cssId;
 
   return { elType: "widget", widgetType: tag, settings: settings };
 }
@@ -410,6 +417,9 @@ export async function mapContainer(node, children, isRoot, isForcedFull, maps) {
     extractBorders(node, settings, false);
     extractShadows(node, settings, false);
 
+    const cssId = sanitizeCssId(node.name);
+    if (cssId) settings.css_id = cssId;
+
     return { elType: "container", settings: settings, elements: children };
   } catch (err) {
     console.error("Erro crítico em mapContainer, ignorando:", err);
@@ -440,6 +450,9 @@ export async function mapText(node, maps) {
 
     extractShadows(node, settings, true);
 
+    const cssId = sanitizeCssId(node.name);
+    if (cssId) settings.css_id = cssId;
+
     if (widgetType === "heading") {
       settings.title = node.characters;
       if (style.color) settings.title_color = style.color;
@@ -459,6 +472,9 @@ export async function mapImage(node) {
 
   extractBorders(node, settings, true, "image");
   extractShadows(node, settings, true, "image");
+
+  const cssId = sanitizeCssId(node.name);
+  if (cssId) settings.css_id = cssId;
 
   return { elType: "widget", widgetType: "image", settings: settings };
 }
