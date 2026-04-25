@@ -24,6 +24,7 @@ e este projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - Mensagens da admin page alinhadas ao comportamento real da autenticação por token.
 - Helper do Elementor documentado e ajustado para busca recursiva por referência em `find_element_by_css_id`.
 - Mensagem de erro `401` da REST API alinhada ao Plano 2 revisado.
+- Documentação operacional atualizada para exigir exclusão de `/wp-json/figmentor/` do cache de plugins/servidor, evitando bypass de autenticação e leituras stale no bridge.
 
 ---
 

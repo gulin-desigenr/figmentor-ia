@@ -75,6 +75,30 @@ O Figmentor permite que você:
 4. Selecione o arquivo `manifest.json` deste repositório
 5. O plugin aparecerá em **Plugins → Development**
 
+### Operação do Figmentor Bridge no WordPress
+
+Se você estiver usando o plugin WordPress `Figmentor Bridge`, as rotas REST do bridge **não podem ser armazenadas em cache** por plugins como LiteSpeed Cache, WP Rocket, W3 Total Cache ou cache de servidor/CDN.
+
+Adicione uma exclusão de URI no sistema de cache do WordPress/servidor para o prefixo:
+
+```text
+/wp-json/figmentor/
+```
+
+No LiteSpeed Cache, isso deve ser configurado em:
+
+```text
+LiteSpeed Cache > Cache > Excludes > Do Not Cache URIs
+```
+
+Sem essa exclusão, o ambiente pode:
+
+- servir `GET /wp-json/figmentor/v1/pages/{id}` com resposta stale
+- retornar `200` em `GET` sem token por resposta cacheada
+- ignorar a autenticação real do endpoint antes de o PHP executar
+
+Em ambientes com Hostinger/LiteSpeed, essa exclusão é obrigatória para a operação correta do bridge.
+
 ---
 
 ## 🏷️ Tags Suportadas

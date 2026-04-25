@@ -466,6 +466,30 @@ O cliente (agente de IA) precisa apenas de:
 
 > **Por que não Application Passwords?** Em alguns ambientes WordPress (configurações específicas de servidor, plugins de segurança, HTTPS não configurado), a seção de Application Passwords não aparece no perfil do usuário. O token próprio do plugin é sempre disponível após instalação.
 
+---
+
+### Cache e interferência na autenticação REST
+
+> **Achado de runtime (fase 2.5):** Em testes robustos, `PUT` e `POST` sem token retornaram `401` como esperado, mas `GET /pages/{id}` sem token retornou `200`. O mesmo teste mostrou que o `GET` continuou retornando dados stale até `POST /cache/clear` ser executado. Todos os endpoints usam o mesmo `check_permission()`, então o problema **não** está no código de autenticação.
+>
+> O diagnóstico mais provável é que o `GET` estava sendo servido por cache (WordPress Object Cache, plugin de cache, CDN ou cache de servidor) **antes** de a requisição REST chegar ao `permission_callback`. O dado stale confirmou esse comportamento.
+
+**Consequências para o plugin:**
+
+1. **O `GET /pages/{id}` não pode ser cacheado.** Qualquer camada de cache (WordPress, plugin de cache, servidor, CDN) que intercepte esse endpoint antes da execução do PHP entrega a resposta sem passar por `check_permission()`, efetivamente bypassando a autenticação.
+
+2. **O plugin é responsável por emitir headers anti-cache nas respostas REST.** Não é possível garantir que o ambiente de hospedagem do usuário não terá cache configurado — a defesa deve estar no código do plugin.
+
+3. **Leituras após escrita precisam ser fresh.** Se um agente fizer `PUT` seguido de `GET` sem limpar cache entre as operações, o `GET` pode retornar o estado anterior.
+
+**Solução requerida no plugin:**
+
+- O controller `get_page()` deve chamar `nocache_headers()` (função nativa do WordPress) antes de retornar a resposta. Isso emite `Cache-Control: no-cache, must-revalidate, max-age=0`, `Pragma: no-cache` e `Expires: Wed, 11 Jan 1984 05:00:00 GMT`.
+- Isso não impede o WordPress REST API de funcionar — apenas instrui caches intermediários a não armazenar a resposta.
+- Os endpoints `PUT` e `POST` já são seguros por natureza (caches HTTP não armazenam métodos que não sejam `GET`/`HEAD`), mas chamar `nocache_headers()` nesses controllers também é defensivamente correto.
+
+> **Nota de diagnóstico para testes:** A validação de "GET sem token retorna 401" só é conclusiva depois que: (a) o header `Cache-Control: no-cache` está presente na resposta do GET, e (b) nenhum cache externo está ativo (ou foi purgado). Veja as instruções na Fase 2.5.
+
 ## Estrutura de arquivos do plugin WordPress
 
 O plugin deve ser criado dentro do repositório, em um diretório separado:
@@ -855,8 +879,15 @@ class Figmentor_Bridge_REST_API {
     /**
      * GET /pages/{page_id}
      * Retorna a estrutura completa do Elementor para a página.
+     *
+     * nocache_headers() é chamado antes de retornar para garantir que nenhuma camada
+     * de cache (WordPress Object Cache, plugin de cache, CDN, servidor) sirva esta
+     * resposta sem passar pelo permission_callback. Ver seção "Cache e interferência
+     * na autenticação REST" no PLANO_BRIDGE_ELEMENTOR.md.
      */
     public function get_page( WP_REST_Request $request ) {
+        nocache_headers();
+
         $page_id = (int) $request->get_param( 'page_id' );
         $data    = Figmentor_Bridge_Elementor_Helper::get_page_data( $page_id );
 
@@ -957,6 +988,8 @@ class Figmentor_Bridge_REST_API {
 - [ ] O `css_id` é sanitizado antes de usar (`sanitize_text_field`)
 - [ ] O `css_id` não pode ser sobrescrito acidentalmente via o body do PUT (`unset($new_settings['css_id'])`)
 - [ ] A rota do PUT usa regex `[a-z0-9\-]+` no parâmetro `css_id` — apenas caracteres válidos
+- [ ] `nocache_headers()` é chamado no início do controller `get_page()` — a resposta do GET deve conter `Cache-Control: no-cache, must-revalidate, max-age=0`
+- [ ] Verificar no curl que o header `Cache-Control` aparece na resposta do GET: `curl -v -H "X-Figmentor-Token: $TOKEN" "$SITE/wp-json/figmentor/v1/pages/$PAGE_ID" 2>&1 | grep -i cache-control`
 
 ---
 
@@ -977,6 +1010,43 @@ export TOKEN="seu-token-de-64-caracteres-aqui"
 export SITE="https://seu-site.com"
 export PAGE_ID=42
 ```
+
+### Pré-requisito adicional: Neutralizar cache antes dos testes
+
+> **Por quê?** Em testes de campo, `GET /pages/{id}` sem token retornou `200` (em vez de `401`) enquanto `PUT` e `POST` sem token retornaram `401` corretamente. O mesmo `GET` retornou dados stale até `POST /cache/clear`. Todos os endpoints usam o mesmo `check_permission()`, portanto o desvio no GET é causado por cache servindo a resposta antes de o PHP ser executado. A validação de autenticação do GET só é conclusiva após cache neutralizado e headers anti-cache confirmados na resposta.
+
+Antes de qualquer teste de autenticação no GET, execute:
+
+```bash
+# 1. Limpar cache do Elementor
+curl -s -X POST \
+  -H "X-Figmentor-Token: $TOKEN" \
+  "$SITE/wp-json/figmentor/v1/pages/$PAGE_ID/cache/clear"
+
+# 2. Se o site usar plugin de cache (WP Rocket, LiteSpeed Cache, W3 Total Cache, etc.),
+#    limpe o cache também por lá (painel do plugin ou via WP-CLI):
+#    wp cache flush
+#    wp litespeed-cache flush  (se LiteSpeed)
+
+# 3. Se houver CDN (Cloudflare, etc.), purge o endpoint manualmente.
+```
+
+### Teste 0 — Confirmar headers anti-cache no GET
+
+Antes de testar autenticação, verifique que `nocache_headers()` está ativo:
+
+```bash
+curl -sv \
+  -H "X-Figmentor-Token: $TOKEN" \
+  "$SITE/wp-json/figmentor/v1/pages/$PAGE_ID" 2>&1 \
+  | grep -i "cache-control"
+```
+
+**Resultado esperado:** linha contendo `cache-control: no-cache, must-revalidate, max-age=0`
+
+**Se `Cache-Control` não aparecer ou contiver `max-age > 0`:** `nocache_headers()` não está sendo chamado no controller `get_page()` — verifique a implementação da Fase 2.4.
+
+**Não prossiga para o teste de autenticação sem este header confirmado.**
 
 ### Teste 1 — GET /pages/{page_id}
 
@@ -1028,10 +1098,15 @@ curl -s -X POST \
 ### VALIDAÇÃO 2.5 — CHECKPOINT 2
 
 - [ ] GET retorna a estrutura correta da página com status 200
+- [ ] GET retorna o header `Cache-Control: no-cache, must-revalidate, max-age=0` (confirmado via `curl -sv`)
 - [ ] PUT localiza o elemento pelo `css_id` e atualiza as settings
 - [ ] A mudança é visível no editor do Elementor após o PUT (sem necessidade de salvar manualmente)
 - [ ] POST de limpeza de cache retorna sucesso
-- [ ] Requisições sem autenticação retornam 401
+- [ ] PUT sem token retorna 401 — conclusivo imediatamente (PUT/POST não são cacheados por caches HTTP)
+- [ ] POST sem token retorna 401 — conclusivo imediatamente
+- [ ] GET sem token retorna 401 — **este item só é conclusivo após**: (1) Teste 0 confirmar header `Cache-Control: no-cache` na resposta, e (2) cache externo ter sido purgado (ver Pré-requisito de cache na Fase 2.5)
+- [ ] Rotas `figmentor/v1` não são servidas por nenhum cache externo identificado no ambiente (plugin de cache, CDN)
+- [ ] GET após PUT retorna o estado atualizado — não retorna dado stale da escrita anterior (teste: fazer PUT, depois GET imediato sem cache/clear, o elemento atualizado deve aparecer)
 - [ ] PUT com `css_id` inexistente retorna 404 com mensagem descritiva
 - [ ] PUT sem o campo `settings` retorna 400 com mensagem descritiva
 

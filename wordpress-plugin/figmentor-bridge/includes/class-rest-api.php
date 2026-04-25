@@ -68,8 +68,13 @@ class Figmentor_Bridge_REST_API {
 
     /**
      * Retorna a estrutura completa do Elementor para a página.
+     *
+     * Evita que camadas intermediárias sirvam essa resposta sem executar
+     * o fluxo normal de autenticação da REST API.
      */
     public function get_page( WP_REST_Request $request ) {
+        nocache_headers();
+
         $page_id = (int) $request->get_param( 'page_id' );
         $data    = Figmentor_Bridge_Elementor_Helper::get_page_data( $page_id );
 
