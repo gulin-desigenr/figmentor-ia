@@ -52,6 +52,10 @@ class Figmentor_Bridge_Elementor_Helper {
     /**
      * Busca recursivamente um elemento pelo css_id dentro da árvore do Elementor.
      * Retorna referência ao elemento encontrado ou null.
+     *
+     * Declarada como &find_element_by_css_id para permitir retorno por referência.
+     * O static $not_found é necessário porque PHP não permite retornar literal null
+     * por referência — é preciso uma variável estática.
      */
     public static function &find_element_by_css_id( &$elements, $css_id ) {
         static $not_found = null;

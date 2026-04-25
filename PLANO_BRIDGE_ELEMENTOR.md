@@ -450,12 +450,21 @@ if (class_exists('\Elementor\Plugin')) {
 
 ### Autenticação
 
-O plugin usará **WordPress Application Passwords** (nativo desde WP 5.6). O cliente (agente de IA) precisa de:
-- URL do WordPress
-- Username
-- Application Password (gerado em `Usuários > Editar Perfil > Application Passwords`)
+O plugin usa **autenticação própria por token** — independente de Application Passwords.
 
-Header HTTP: `Authorization: Basic base64(username:app_password)`
+O token é gerado em `Configurações > Figmentor Bridge` no painel WordPress e enviado em todas as requisições via header HTTP:
+
+```
+X-Figmentor-Token: <token>
+```
+
+O cliente (agente de IA) precisa apenas de:
+- URL do WordPress
+- Token gerado pelo plugin (64 caracteres hex)
+
+**Fallback permanente:** se a verificação por token não autenticar — seja porque o token não foi gerado, o header `X-Figmentor-Token` está ausente, ou o valor enviado está incorreto — o plugin ainda aceita autenticação WordPress nativa via `current_user_can('edit_pages')` (Application Passwords, cookie de sessão). Isso não é recomendado para automação — gere sempre um token dedicado.
+
+> **Por que não Application Passwords?** Em alguns ambientes WordPress (configurações específicas de servidor, plugins de segurança, HTTPS não configurado), a seção de Application Passwords não aparece no perfil do usuário. O token próprio do plugin é sempre disponível após instalação.
 
 ## Estrutura de arquivos do plugin WordPress
 
@@ -466,6 +475,7 @@ wordpress-plugin/
 └── figmentor-bridge/
     ├── figmentor-bridge.php          # Arquivo principal (cabeçalho do plugin + bootstrap)
     └── includes/
+        ├── class-admin.php           # Página admin, geração/revogação do token de API
         ├── class-rest-api.php        # Registro das rotas REST e controllers
         └── class-elementor-helper.php # Lógica de leitura/escrita/busca no Elementor
 ```
@@ -482,9 +492,9 @@ Crie `wordpress-plugin/figmentor-bridge/figmentor-bridge.php`:
 <?php
 /**
  * Plugin Name: Figmentor Bridge
- * Plugin URI:  https://github.com/seu-usuario/figmentor
+ * Plugin URI:  https://github.com/gulin-desigenr/figmentor-ia
  * Description: REST API para leitura e escrita de dados do Elementor. Usado pelo agente de IA para aplicar estilos automaticamente.
- * Version:     1.0.0
+ * Version:     1.1.0
  * Author:      Pedro Gulin
  * License:     Private
  * Requires at least: 5.6
@@ -495,11 +505,17 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'FIGMENTOR_BRIDGE_VERSION', '1.0.0' );
+define( 'FIGMENTOR_BRIDGE_VERSION', '1.1.0' );
 define( 'FIGMENTOR_BRIDGE_DIR', plugin_dir_path( __FILE__ ) );
 
 require_once FIGMENTOR_BRIDGE_DIR . 'includes/class-elementor-helper.php';
+require_once FIGMENTOR_BRIDGE_DIR . 'includes/class-admin.php';
 require_once FIGMENTOR_BRIDGE_DIR . 'includes/class-rest-api.php';
+
+add_action( 'init', function () {
+    $admin = new Figmentor_Bridge_Admin();
+    $admin->init();
+} );
 
 add_action( 'rest_api_init', function () {
     $api = new Figmentor_Bridge_REST_API();
@@ -515,14 +531,116 @@ add_action( 'rest_api_init', function () {
 
 ---
 
-## Fase 2.2 — Helper do Elementor
+## Fase 2.2 — Página administrativa e gerenciamento de token
 
-Crie `wordpress-plugin/figmentor-bridge/includes/class-elementor-helper.php`:
+Crie `wordpress-plugin/figmentor-bridge/includes/class-admin.php`.
 
-### Método 1: Ler dados da página
+### Responsabilidades
+
+- Registrar `Configurações > Figmentor Bridge` no menu do WordPress via `add_options_page()`
+- Gerar e armazenar o token via `bin2hex(random_bytes(32))` → 64 chars hex, opção `figmentor_bridge_api_token` com `autoload=false`
+- Permitir regeneração (invalida o anterior) e revogação (remove a opção)
+- Expor `get_token()` como método estático — é chamado por `Figmentor_Bridge_REST_API::check_permission`
+- Exibir na UI: status do token, campo mascarado com botões Revelar/Copiar, base URL da API e exemplos curl
+
+### Estrutura da classe
 
 ```php
 <?php
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+class Figmentor_Bridge_Admin {
+
+    const OPTION_KEY   = 'figmentor_bridge_api_token';
+    const NONCE_ACTION = 'figmentor_bridge_token_action';
+
+    public function init() {
+        add_action( 'admin_menu', [ $this, 'register_menu' ] );
+        add_action( 'admin_init', [ $this, 'handle_form' ] );
+        add_action( 'admin_head', [ $this, 'inline_styles' ] );
+    }
+
+    public function register_menu() {
+        add_options_page(
+            'Figmentor Bridge',
+            'Figmentor Bridge',
+            'manage_options',
+            'figmentor-bridge',
+            [ $this, 'render_page' ]
+        );
+    }
+
+    /**
+     * Processa ações de formulário (gerar e revogar token).
+     * Executado antes do output HTML para permitir redirect.
+     */
+    public function handle_form() {
+        if ( ! isset( $_POST['figmentor_action'] ) ) {
+            return;
+        }
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Acesso negado.' );
+        }
+
+        check_admin_referer( self::NONCE_ACTION );
+
+        $action = sanitize_text_field( $_POST['figmentor_action'] );
+
+        if ( $action === 'generate' || $action === 'regenerate' ) {
+            $token = bin2hex( random_bytes( 32 ) );
+            update_option( self::OPTION_KEY, $token, false );
+            wp_redirect( add_query_arg( [ 'page' => 'figmentor-bridge', 'token_generated' => '1' ], admin_url( 'options-general.php' ) ) );
+            exit;
+        }
+
+        if ( $action === 'revoke' ) {
+            delete_option( self::OPTION_KEY );
+            wp_redirect( add_query_arg( [ 'page' => 'figmentor-bridge', 'token_revoked' => '1' ], admin_url( 'options-general.php' ) ) );
+            exit;
+        }
+    }
+
+    public static function get_token() {
+        return get_option( self::OPTION_KEY, '' );
+    }
+
+    // render_page() — exibe status do token, campo mascarado com botões Revelar/Copiar,
+    // formulários Gerar / Regenerar / Revogar (protegidos por wp_nonce_field),
+    // base URL da API e referência rápida de curl.
+    // Ver implementação completa em includes/class-admin.php.
+
+    // inline_styles() — injeta CSS inline apenas na tela settings_page_figmentor-bridge.
+}
+```
+
+> **Nota de segurança:** o token é armazenado em claro em `wp_options`. Isso é equivalente ao nível de exposição de Application Passwords no banco de dados e é aceitável para um plugin privado operado por automação. Sempre use HTTPS em produção.
+
+### VALIDAÇÃO 2.2
+
+- [ ] O arquivo `class-admin.php` foi criado
+- [ ] A página `Configurações > Figmentor Bridge` aparece no menu após ativação do plugin
+- [ ] O botão "Gerar token de API" cria e armazena um token de 64 caracteres hex
+- [ ] O botão "Regenerar token" invalida o token anterior e gera um novo
+- [ ] O botão "Revogar token" remove a opção — a API passa a rejeitar autenticação por token
+- [ ] `Figmentor_Bridge_Admin::get_token()` retorna string vazia quando não há token e o valor correto quando há
+- [ ] Os formulários estão protegidos por nonce (`wp_nonce_field` + `check_admin_referer`)
+
+---
+
+## Fase 2.3 — Helper do Elementor
+
+Crie `wordpress-plugin/figmentor-bridge/includes/class-elementor-helper.php`:
+
+```php
+<?php
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
 
 class Figmentor_Bridge_Elementor_Helper {
 
@@ -538,7 +656,11 @@ class Figmentor_Bridge_Elementor_Helper {
         $raw = get_post_meta( $page_id, '_elementor_data', true );
 
         if ( empty( $raw ) ) {
-            return new WP_Error( 'no_elementor_data', 'Esta página não tem dados do Elementor. Verifique se foi editada com o Elementor.', [ 'status' => 404 ] );
+            return new WP_Error(
+                'no_elementor_data',
+                'Esta página não tem dados do Elementor. Verifique se foi editada com o Elementor.',
+                [ 'status' => 404 ]
+            );
         }
 
         $data = json_decode( $raw, true );
@@ -567,13 +689,23 @@ class Figmentor_Bridge_Elementor_Helper {
 
     /**
      * Busca recursivamente um elemento pelo css_id dentro da árvore do Elementor.
-     * Retorna referência ao elemento (como array PHP) ou null.
+     * Retorna referência ao elemento encontrado ou null.
+     *
+     * Declarada como &find_element_by_css_id para permitir retorno por referência.
+     * O static $not_found é necessário porque PHP não permite retornar literal null
+     * por referência — é preciso uma variável estática.
      */
-    public static function find_element_by_css_id( &$elements, $css_id ) {
-        if ( ! is_array( $elements ) ) return null;
+    public static function &find_element_by_css_id( &$elements, $css_id ) {
+        static $not_found = null;
+
+        if ( ! is_array( $elements ) ) {
+            return $not_found;
+        }
 
         foreach ( $elements as &$element ) {
-            if ( ! isset( $element['settings'] ) ) continue;
+            if ( ! isset( $element['settings'] ) ) {
+                continue;
+            }
 
             if (
                 isset( $element['settings']['css_id'] ) &&
@@ -582,14 +714,15 @@ class Figmentor_Bridge_Elementor_Helper {
                 return $element;
             }
 
-            // Recursão em filhos (containers têm 'elements')
             if ( ! empty( $element['elements'] ) ) {
-                $found = self::find_element_by_css_id( $element['elements'], $css_id );
-                if ( $found !== null ) return $found;
+                $found = &self::find_element_by_css_id( $element['elements'], $css_id );
+                if ( null !== $found ) {
+                    return $found;
+                }
             }
         }
 
-        return null;
+        return $not_found;
     }
 
     /**
@@ -602,24 +735,31 @@ class Figmentor_Bridge_Elementor_Helper {
         }
 
         foreach ( $elements as &$element ) {
-            if ( ! isset( $element['settings'] ) ) continue;
+            if ( ! isset( $element['settings'] ) ) {
+                continue;
+            }
 
             if (
                 isset( $element['settings']['css_id'] ) &&
                 $element['settings']['css_id'] === $css_id
             ) {
-                // Merge das settings: preserva campos existentes, sobrescreve os enviados
                 $element['settings'] = array_merge( $element['settings'], $new_settings );
                 return true;
             }
 
             if ( ! empty( $element['elements'] ) ) {
                 $result = self::update_element_settings( $element['elements'], $css_id, $new_settings );
-                if ( $result === true ) return true;
+                if ( true === $result ) {
+                    return true;
+                }
             }
         }
 
-        return new WP_Error( 'not_found', "Elemento com css_id '{$css_id}' não encontrado na página.", [ 'status' => 404 ] );
+        return new WP_Error(
+            'not_found',
+            "Elemento com css_id '{$css_id}' não encontrado na página.",
+            [ 'status' => 404 ]
+        );
     }
 
     /**
@@ -630,26 +770,33 @@ class Figmentor_Bridge_Elementor_Helper {
             \Elementor\Plugin::$instance->files_manager->clear_cache();
             return true;
         }
+
         return new WP_Error( 'elementor_not_active', 'O Elementor não está ativo.', [ 'status' => 500 ] );
     }
 }
 ```
 
-### VALIDAÇÃO 2.2
+### VALIDAÇÃO 2.3
 
 - [ ] O arquivo `class-elementor-helper.php` foi criado
-- [ ] A função `find_element_by_css_id` usa passagem por referência (`&$elements`) — isso é crítico para a atualização funcionar
+- [ ] A função `find_element_by_css_id` é declarada como `public static function &find_element_by_css_id` (retorno por referência) — necessário para que a recursão propague a referência corretamente
+- [ ] `static $not_found = null` está presente — PHP não permite retornar literal `null` por referência
+- [ ] A chamada recursiva usa `$found = &self::find_element_by_css_id(...)` (com `&`) — sem isso a referência não se propaga
 - [ ] A função `update_element_settings` usa `array_merge` (merge, não substituição total)
 - [ ] A função `save_page_data` usa `wp_slash` — sem isso o JSON será corrompido ao salvar
 
 ---
 
-## Fase 2.3 — REST API (rotas e controllers)
+## Fase 2.4 — REST API (rotas e controllers)
 
 Crie `wordpress-plugin/figmentor-bridge/includes/class-rest-api.php`:
 
 ```php
 <?php
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
 
 class Figmentor_Bridge_REST_API {
 
@@ -775,47 +922,74 @@ class Figmentor_Bridge_REST_API {
     }
 
     /**
-     * Verifica se o usuário tem permissão para usar a API.
-     * Requer autenticação via Application Passwords.
+     * Autenticação primária: header X-Figmentor-Token (token gerado pelo plugin).
+     * Fallback: Application Passwords / cookie WordPress.
      */
     public function check_permission( WP_REST_Request $request ) {
-        return current_user_can( 'edit_pages' );
+        $stored_token = Figmentor_Bridge_Admin::get_token();
+
+        if ( ! empty( $stored_token ) ) {
+            $provided = $request->get_header( 'X-Figmentor-Token' );
+            if ( ! empty( $provided ) && hash_equals( $stored_token, $provided ) ) {
+                return true;
+            }
+        }
+
+        if ( current_user_can( 'edit_pages' ) ) {
+            return true;
+        }
+
+        return new WP_Error(
+            'unauthorized',
+            'Forneça o header X-Figmentor-Token com o token gerado em Configurações > Figmentor Bridge.',
+            [ 'status' => 401 ]
+        );
     }
 }
 ```
 
-### VALIDAÇÃO 2.3
+### VALIDAÇÃO 2.4
 
-- [ ] As 3 rotas foram registradas corretamente
-- [ ] O método `check_permission` usa `current_user_can('edit_pages')` — compatível com Application Passwords
+- [ ] As 3 rotas foram registradas corretamente (`GET /pages/{id}`, `PUT /pages/{id}/widgets/{css_id}`, `POST /pages/{id}/cache/clear`)
+- [ ] O método `check_permission` lê o header `X-Figmentor-Token` e compara via `hash_equals` (timing-safe) quando há token armazenado
+- [ ] O fallback `current_user_can('edit_pages')` está presente como segunda verificação — sempre ativo, não apenas quando o token não foi gerado
+- [ ] O `check_permission` retorna `WP_Error` com status 401 (não apenas `false`) para garantir resposta HTTP correta com body JSON
 - [ ] O `css_id` é sanitizado antes de usar (`sanitize_text_field`)
-- [ ] O `css_id` não pode ser sobrescrito acidentalmente via o body do PUT (linha `unset($new_settings['css_id'])`)
+- [ ] O `css_id` não pode ser sobrescrito acidentalmente via o body do PUT (`unset($new_settings['css_id'])`)
 - [ ] A rota do PUT usa regex `[a-z0-9\-]+` no parâmetro `css_id` — apenas caracteres válidos
 
 ---
 
-## Fase 2.4 — Testes dos endpoints
+## Fase 2.5 — Testes dos endpoints
 
 ### Pré-requisito para os testes
 
 1. O plugin está ativado no WordPress
 2. O Elementor está ativo
 3. Existe uma página editada com o Elementor com `_elementor_data` preenchido
-4. Você criou um Application Password para um usuário com role `editor` ou `administrator`
+4. Você gerou um token em `Configurações > Figmentor Bridge` — copie o valor do token
 5. Você tem o `page_id` da página (visível na URL do painel: `wp-admin/post.php?post=42&action=edit`)
+
+Defina o token como variável de ambiente para simplificar os testes:
+
+```bash
+export TOKEN="seu-token-de-64-caracteres-aqui"
+export SITE="https://seu-site.com"
+export PAGE_ID=42
+```
 
 ### Teste 1 — GET /pages/{page_id}
 
 ```bash
 curl -s \
-  -u "username:app-password" \
-  "https://seu-site.com/wp-json/figmentor/v1/pages/42" \
+  -H "X-Figmentor-Token: $TOKEN" \
+  "$SITE/wp-json/figmentor/v1/pages/$PAGE_ID" \
   | python3 -m json.tool | head -50
 ```
 
 **Resultado esperado:** JSON com `page_id`, `title`, e `elements` (array com a estrutura do Elementor).
 
-**Se retornar 401:** As credenciais estão erradas ou Application Passwords não estão habilitados.
+**Se retornar 401:** Token não gerado ou incorreto — verifique em `Configurações > Figmentor Bridge`.
 **Se retornar 404 com `no_elementor_data`:** A página não foi editada com o Elementor.
 
 ### Teste 2 — PUT /pages/{page_id}/widgets/{css_id}
@@ -824,7 +998,7 @@ Primeiro, via GET, encontre um elemento que tenha `css_id` definido (deve ter si
 
 ```bash
 curl -s -X PUT \
-  -u "username:app-password" \
+  -H "X-Figmentor-Token: $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "settings": {
@@ -834,7 +1008,7 @@ curl -s -X PUT \
       }
     }
   }' \
-  "https://seu-site.com/wp-json/figmentor/v1/pages/42/widgets/titulo-principal-da-hero"
+  "$SITE/wp-json/figmentor/v1/pages/$PAGE_ID/widgets/titulo-principal-da-hero"
 ```
 
 **Resultado esperado:** `{ "success": true, "css_id": "titulo-principal-da-hero", ... }`
@@ -845,13 +1019,13 @@ Após o teste, verifique no painel do WordPress (Elementor > abrir a página) se
 
 ```bash
 curl -s -X POST \
-  -u "username:app-password" \
-  "https://seu-site.com/wp-json/figmentor/v1/pages/42/cache/clear"
+  -H "X-Figmentor-Token: $TOKEN" \
+  "$SITE/wp-json/figmentor/v1/pages/$PAGE_ID/cache/clear"
 ```
 
 **Resultado esperado:** `{ "success": true, "message": "Cache do Elementor limpo com sucesso." }`
 
-### VALIDAÇÃO 2.4 — CHECKPOINT 2
+### VALIDAÇÃO 2.5 — CHECKPOINT 2
 
 - [ ] GET retorna a estrutura correta da página com status 200
 - [ ] PUT localiza o elemento pelo `css_id` e atualiza as settings
@@ -864,8 +1038,11 @@ curl -s -X POST \
 **Se todos os itens passarem: o Plano 2 está concluído. Faça commit.**
 
 ```bash
-git add wordpress-plugin/
-git commit -m "feat(wordpress): add Figmentor Bridge plugin with REST API for Elementor"
+git add wordpress-plugin/figmentor-bridge/figmentor-bridge.php \
+        wordpress-plugin/figmentor-bridge/includes/class-admin.php \
+        wordpress-plugin/figmentor-bridge/includes/class-elementor-helper.php \
+        wordpress-plugin/figmentor-bridge/includes/class-rest-api.php
+git commit -m "feat(wordpress): add Figmentor Bridge plugin with token auth and REST API for Elementor"
 ```
 
 ---
@@ -976,9 +1153,14 @@ Antes de executar qualquer passo, confirme que você tem:
 1. O link ou ID do arquivo Figma com o design
 2. O ID da página no WordPress (ex: 42)
 3. A URL base do WordPress (ex: https://meusite.com)
-4. O username e Application Password para a REST API
+4. O token de API do plugin Figmentor Bridge (gerado em `Configurações > Figmentor Bridge`)
 
 Se algum desses estiver faltando, solicite ao usuário antes de prosseguir.
+
+O token deve ser enviado em todas as requisições via header:
+```
+X-Figmentor-Token: <token>
+```
 
 ## Passo 1 — Ler a estrutura da página no Elementor
 
@@ -1045,7 +1227,7 @@ Informe:
 
 | Erro | Causa | Solução |
 |---|---|---|
-| 401 nas chamadas | Credenciais incorretas | Verificar username + application password |
+| 401 nas chamadas | Token ausente ou incorreto | Verificar token em Configurações > Figmentor Bridge; regenerar se necessário |
 | 404 em GET /pages | page_id errado ou página sem Elementor | Confirmar ID com o usuário |
 | 404 em PUT /widgets | css_id não existe na página | O JSON foi importado sem o Plano 1 implementado |
 | 500 em PUT | Erro ao salvar no WordPress | Verificar logs do WordPress (wp-content/debug.log) |

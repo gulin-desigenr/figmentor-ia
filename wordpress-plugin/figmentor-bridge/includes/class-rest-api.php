@@ -149,9 +149,30 @@ class Figmentor_Bridge_REST_API {
     }
 
     /**
-     * Requer autenticação via Application Passwords.
+     * Verifica autenticação via token próprio do plugin (header X-Figmentor-Token).
+     * Fallback: Application Passwords / cookie session (current_user_can).
      */
     public function check_permission( WP_REST_Request $request ) {
-        return current_user_can( 'edit_pages' );
+        $stored_token = Figmentor_Bridge_Admin::get_token();
+
+        // Método primário: token próprio do plugin
+        if ( ! empty( $stored_token ) ) {
+            $provided = $request->get_header( 'X-Figmentor-Token' );
+
+            if ( ! empty( $provided ) && hash_equals( $stored_token, $provided ) ) {
+                return true;
+            }
+        }
+
+        // Fallback: autenticação WordPress nativa (Application Passwords, cookie, etc.)
+        if ( current_user_can( 'edit_pages' ) ) {
+            return true;
+        }
+
+        return new WP_Error(
+            'unauthorized',
+            'Forneça o header X-Figmentor-Token com o token gerado em Configurações > Figmentor Bridge.',
+            [ 'status' => 401 ]
+        );
     }
 }

@@ -7,6 +7,26 @@ e este projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [1.2.0] - 2026-04-25
+
+### Adicionado
+- Plugin WordPress `Figmentor Bridge` em `wordpress-plugin/figmentor-bridge/`.
+- Página administrativa em `Configurações > Figmentor Bridge` para gerar, regenerar e revogar token de API.
+- Autenticação própria via header `X-Figmentor-Token` para os endpoints REST do bridge.
+- Endpoint REST para leitura da estrutura Elementor por `page_id`.
+- Endpoint REST para atualização de widgets por `css_id`.
+- Endpoint REST para limpeza de cache do Elementor.
+
+### Alterado
+- `PLANO_BRIDGE_ELEMENTOR.md` foi reestruturado no Plano 2 para refletir autenticação por token, admin page e validações por fase.
+
+### Corrigido
+- Mensagens da admin page alinhadas ao comportamento real da autenticação por token.
+- Helper do Elementor documentado e ajustado para busca recursiva por referência em `find_element_by_css_id`.
+- Mensagem de erro `401` da REST API alinhada ao Plano 2 revisado.
+
+---
+
 ## [1.1.0] - 2026-03-28
 
 ### Adicionado
