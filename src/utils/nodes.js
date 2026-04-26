@@ -49,3 +49,39 @@ export function getSafeFontFamily(node) {
   return node.fontName.family || null;
 }
 
+const TEXT_ALIGN_MAP = {
+  LEFT: "left",
+  CENTER: "center",
+  RIGHT: "right",
+  JUSTIFIED: "justify"
+};
+
+function mapTextAlign(textAlignHorizontal) {
+  return TEXT_ALIGN_MAP[textAlignHorizontal] || "left";
+}
+
+export function getTextAlign(node) {
+  if (!node) return "left";
+
+  if (
+    node.type === "TEXT" &&
+    node.textAlignHorizontal &&
+    node.textAlignHorizontal !== figma.mixed
+  ) {
+    return mapTextAlign(node.textAlignHorizontal);
+  }
+
+  if ("findOne" in node) {
+    const textChild = node.findOne(child => (
+      child.type === "TEXT" &&
+      child.textAlignHorizontal &&
+      child.textAlignHorizontal !== figma.mixed
+    ));
+
+    if (textChild) {
+      return mapTextAlign(textChild.textAlignHorizontal);
+    }
+  }
+
+  return "left";
+}

@@ -109,6 +109,53 @@ export async function extractTextStyle(node, maps = { colorMap: {}, typoMap: {} 
   // A1/A2: Safe font-family extraction (guards figma.mixed and undefined)
   const fontFamily = getSafeFontFamily(node);
 
+  let lineHeight = null;
+  if (node.lineHeight !== undefined && node.lineHeight !== figma.mixed) {
+    if (node.lineHeight.unit !== "AUTO") {
+      lineHeight = {
+        size: node.lineHeight.value,
+        unit: node.lineHeight.unit === "PIXELS" ? "px" : "%"
+      };
+    }
+  }
+
+  let letterSpacing = null;
+  if (node.letterSpacing !== undefined && node.letterSpacing !== figma.mixed) {
+    if (node.letterSpacing.value !== 0) {
+      letterSpacing = {
+        size: node.letterSpacing.value,
+        unit: node.letterSpacing.unit === "PIXELS" ? "px" : "em"
+      };
+    }
+  }
+
+  let textTransform = null;
+  if (node.textCase !== undefined && node.textCase !== figma.mixed) {
+    const caseMap = {
+      UPPER: "uppercase",
+      LOWER: "lowercase",
+      TITLE: "capitalize",
+      SMALL_CAPS: "uppercase"
+    };
+    textTransform = caseMap[node.textCase] || null;
+  }
+
+  let textDecoration = null;
+  if (node.textDecoration !== undefined && node.textDecoration !== figma.mixed) {
+    const decorMap = {
+      UNDERLINE: "underline",
+      STRIKETHROUGH: "line-through"
+    };
+    textDecoration = decorMap[node.textDecoration] || null;
+  }
+
+  let fontStyle = null;
+  if (node.fontName !== undefined && node.fontName !== figma.mixed) {
+    if (node.fontName.style.includes("Italic")) {
+      fontStyle = "italic";
+    }
+  }
+
   if (node.textStyleId) {
     const style = await figma.getStyleByIdAsync(node.textStyleId);
     if (style && maps.typoMap && maps.typoMap[style.name]) {
@@ -116,7 +163,19 @@ export async function extractTextStyle(node, maps = { colorMap: {}, typoMap: {} 
     }
   }
 
-  return { color, size, weight, fontFamily, globalColorId, globalTypoId };
+  return {
+    color,
+    size,
+    weight,
+    fontFamily,
+    globalColorId,
+    globalTypoId,
+    lineHeight,
+    letterSpacing,
+    textTransform,
+    textDecoration,
+    fontStyle
+  };
 }
 
 export async function extractBackground(node, maps = { colorMap: {}, typoMap: {} }) {

@@ -2,7 +2,8 @@ import { traverseNode } from './traverse.js';
 import { extractBorders, extractShadows, extractTextStyle, extractBackground } from '../styles/index.js';
 import { figmaColorToRGBA } from '../utils/colors.js';
 import { sanitizeCssId } from '../utils/cssId.js';
-import { getIterableNodes, getLayoutDirection, hasImageFill, getNodeRole } from '../utils/nodes.js';
+import { getIterableNodes, getLayoutDirection, getTextAlign, hasImageFill, getNodeRole } from '../utils/nodes.js';
+import { applyTypographySettings } from '../utils/typography.js';
 
 export async function handleManualTag(node, tag, isRoot, maps) {
   if (tag === 'container' || tag === 'container-full' || tag === 'page-wrapper') {
@@ -36,7 +37,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
   const mainStyle = styles.length > 0 ? styles[0] : { color: "", size: 16, weight: "400" };
   const secStyle = styles.length > 1 ? styles[1] : mainStyle;
 
-  let settings = { align: "center" };
+  let settings = {};
   let bgSettings = {};
 
   if (node.type !== "TEXT") {
@@ -66,10 +67,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
       settings.__globals__ = settings.__globals__ || {};
       settings.__globals__.title_typography_typography = `globals/typography?id=${tStyle.globalTypoId}`;
     }
-    settings.title_typography_typography = "custom";
-    settings.title_typography_font_size = { size: tStyle.size, unit: "px" };
-    settings.title_typography_font_weight = tStyle.weight;
-    if (tStyle.fontFamily) settings.title_typography_font_family = tStyle.fontFamily; // B4
+    applyTypographySettings(settings, tStyle, "title_typography");
 
     settings.description_text = descNode ? descNode.characters : texts.slice(1).join(" ");
     let dStyle = descNode ? await extractTextStyle(descNode, maps) : secStyle;
@@ -82,11 +80,9 @@ export async function handleManualTag(node, tag, isRoot, maps) {
       settings.__globals__ = settings.__globals__ || {};
       settings.__globals__.description_typography_typography = `globals/typography?id=${dStyle.globalTypoId}`;
     }
-    settings.description_typography_typography = "custom";
-    settings.description_typography_font_size = { size: dStyle.size, unit: "px" };
-    settings.description_typography_font_weight = dStyle.weight;
-    if (dStyle.fontFamily) settings.description_typography_font_family = dStyle.fontFamily; // B4
+    applyTypographySettings(settings, dStyle, "description_typography");
 
+    settings.text_align = getTextAlign(node);
     settings.image = { url: "", id: "" };
   }
   else if (tag === "icon-box") {
@@ -106,10 +102,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
       settings.__globals__ = settings.__globals__ || {};
       settings.__globals__.title_typography_typography = `globals/typography?id=${tStyle.globalTypoId}`;
     }
-    settings.title_typography_typography = "custom";
-    settings.title_typography_font_size = { size: tStyle.size, unit: "px" };
-    settings.title_typography_font_weight = tStyle.weight;
-    if (tStyle.fontFamily) settings.title_typography_font_family = tStyle.fontFamily; // B5
+    applyTypographySettings(settings, tStyle, "title_typography");
 
     settings.description_text = descNode ? descNode.characters : texts.slice(1).join(" ");
     settings.description = settings.description_text;
@@ -124,10 +117,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
       settings.__globals__ = settings.__globals__ || {};
       settings.__globals__.description_typography_typography = `globals/typography?id=${dStyle.globalTypoId}`;
     }
-    settings.description_typography_typography = "custom";
-    settings.description_typography_font_size = { size: dStyle.size, unit: "px" };
-    settings.description_typography_font_weight = dStyle.weight;
-    if (dStyle.fontFamily) settings.description_typography_font_family = dStyle.fontFamily; // B5
+    applyTypographySettings(settings, dStyle, "description_typography");
 
     let iconColor = mainStyle.color;
     let iconName = "fas fa-star";
@@ -153,6 +143,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
 
     settings.selected_icon = { value: iconName, library: iconName.startsWith("fab") ? "fa-brands" : "fa-solid" };
     if (iconColor) settings.primary_color = iconColor;
+    settings.text_align = getTextAlign(node);
   }
   else if (tag === "icon-list") {
     let listItems = texts;
@@ -176,13 +167,10 @@ export async function handleManualTag(node, tag, isRoot, maps) {
       settings.__globals__ = settings.__globals__ || {};
       settings.__globals__.text_typography_typography = `globals/typography?id=${mainStyle.globalTypoId}`;
     }
-
-    settings.text_typography_typography = "custom";
-    settings.text_typography_font_size = { size: mainStyle.size, unit: "px" };
-    settings.text_typography_font_weight = mainStyle.weight;
-    if (mainStyle.fontFamily) settings.text_typography_font_family = mainStyle.fontFamily; // B6
+    applyTypographySettings(settings, mainStyle, "text_typography");
   }
   else if (tag === "heading") {
+    settings.align = getTextAlign(node);
     settings.title = texts.join(" ");
     if (mainStyle.color) settings.title_color = mainStyle.color;
     if (mainStyle.globalColorId) {
@@ -193,12 +181,10 @@ export async function handleManualTag(node, tag, isRoot, maps) {
       settings.__globals__ = settings.__globals__ || {};
       settings.__globals__.typography_typography = `globals/typography?id=${mainStyle.globalTypoId}`;
     }
-    settings.typography_typography = "custom";
-    settings.typography_font_size = { size: mainStyle.size, unit: "px" };
-    settings.typography_font_weight = mainStyle.weight;
-    if (mainStyle.fontFamily) settings.typography_font_family = mainStyle.fontFamily; // B1
+    applyTypographySettings(settings, mainStyle, "typography");
   }
   else if (tag === "text-editor") {
+    settings.align = getTextAlign(node);
     settings.editor = texts.join("<br>");
     if (mainStyle.color) settings.text_color = mainStyle.color;
     if (mainStyle.globalColorId) {
@@ -209,10 +195,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
       settings.__globals__ = settings.__globals__ || {};
       settings.__globals__.typography_typography = `globals/typography?id=${mainStyle.globalTypoId}`;
     }
-    settings.typography_typography = "custom";
-    settings.typography_font_size = { size: mainStyle.size, unit: "px" };
-    settings.typography_font_weight = mainStyle.weight;
-    if (mainStyle.fontFamily) settings.typography_font_family = mainStyle.fontFamily; // B2
+    applyTypographySettings(settings, mainStyle, "typography");
   }
 
   else if (tag === "button") {
@@ -230,11 +213,7 @@ export async function handleManualTag(node, tag, isRoot, maps) {
         settings.__globals__ = settings.__globals__ || {};
         settings.__globals__.typography_typography = `globals/typography?id=${mainStyle.globalTypoId}`;
       }
-
-      settings.typography_typography = "custom";
-      settings.typography_font_size = { size: mainStyle.size, unit: "px" };
-      settings.typography_font_weight = mainStyle.weight;
-      if (mainStyle.fontFamily) settings.typography_font_family = mainStyle.fontFamily; // B3
+      applyTypographySettings(settings, mainStyle, "typography");
 
       if (settings._background_color) {
         settings.background_color = settings._background_color;
@@ -432,12 +411,9 @@ export async function mapText(node, maps) {
     const style = await extractTextStyle(node, maps);
     const widgetType = style.size >= 32 ? "heading" : "text-editor";
     let settings = {
-      align: "center",
-      typography_typography: "custom",
-      typography_font_size: { size: style.size, unit: "px" },
-      typography_font_weight: style.weight
+      align: getTextAlign(node)
     };
-    if (style.fontFamily) settings.typography_font_family = style.fontFamily; // B7
+    applyTypographySettings(settings, style, "typography");
 
     if (style.globalColorId) {
       settings.__globals__ = settings.__globals__ || {};
@@ -468,6 +444,7 @@ export async function mapText(node, maps) {
 }
 
 export async function mapImage(node) {
+  // Image widget alignment stays centered; actual positioning is controlled by the parent container.
   let settings = { image: { url: "", id: "" }, align: "center" };
 
   extractBorders(node, settings, true, "image");
